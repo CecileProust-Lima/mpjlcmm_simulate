@@ -1,24 +1,24 @@
-## K = number of markers
-## N = number of subjects
-## ng = number of latent classes
+## K = nombre de composantes
+## N = nombre de sujets
+## ng = nombre de classes latentes
 ## t = tmin1,tmax1,tecart1,trand1,...,tminK,tmaxK,tecartK,trandK
 ## Xbin = propX1,...,propXp1
 ## Xcont = meanXp1+1,sdXp1+1, ..., meanXp1+p2,sdXp1+p2
 ## beta_Y1 = list(I=c(I_G1,I_G2), t=c(t_G1,t_G2,etc), X1=c(X1_G1,X1_G2), tX1=c(tX1,tX1), etc)
 ## beta_Y2 = list(I=c(I_G1,I_G2), t=c(t_G1,t_G2,etc), X1=c(X1,X1), X2=c(X2,X2), etc)
 ## ... beta_YK
-## Z = indicates the number of random effects for each component: no random effect (0), only intercept (1) or intercept and t (2)
-## B1 = matrix of VC for random effects of marker Y1
-## ... BK = matrix of VC for random effects of marker Y1
-## linear1, ..., linearK = parameters for the transformations
-## weib = parameters for Weibull risk of event (2 prm or 2*ng prm)
+## Z = indique pour chaque composante si on a aucun effet aleatoire (0), que l'intercept (1) ou l'intercept et t (2)
+## B1 = matrice de variance des effets aleatoires de Y1
+## ... BK = matrice de variance des effets aleatoires de YK
+## linear1, ..., linearK = parametres des transfos
+## weib = parametres pour la survie en weibull (2 prm ou 2*ng prm)
 ## beta_S = list(X1=c(X1_G1,X1_G2), X2=c(X2_G1,X2_G2,etc))
-## age0 = for the time scale in age rather than delay _ parameters min et max 
-## NB : if age0 : age=(ti+a-65)/10
-## scalet : expression to go from the time scale for longi to the one for survival (ex: scalet=t*0.5/11)
-## piecewise : list with $nodes, $brisq et $ph
+## age0 = pour echelle de temps en age au lieu du delai _ parametres min et max 
+## NB : si age0 : age=(ti+a-65)/10
+## scalet : expression pour passer du temps longi au temps survie (avec t comme variable, ex: scalet=t*0.5/11)
+## piecewise : list avec $nodes, $brisq et $ph
 
-simdata_mpjlcmm <- function(K,N,ng,t,age0=NULL,Xbin=NULL,Xcont=NULL,beta_Y1,beta_Y2=NULL,Z,B1,B2=NULL,linear1,linear2=NULL,sigma=c(1,1),prop,weib=NULL,beta_S=NULL,logscale=FALSE,rweib=TRUE,piecewise=NULL,scalet,seed)
+simdata_mpjlcmm <- function(K,N,ng,t,age0=NULL,Xbin=NULL,Xcont=NULL,beta_Y1,beta_Y2=NULL,beta_Y3=NULL,Z,B1,B2=NULL,B3=NULL,vcovB=NULL,linear1,linear2=NULL,linear3=NULL,sigma=rep(1,K),prop,weib=NULL,beta_S=NULL,logscale=FALSE,rweib=TRUE,piecewise=NULL,scalet,seed)
 {
     if(missing(seed)) seed <- round(abs(rnorm(1,mean=5)),5)*100000
     set.seed(seed)
@@ -37,20 +37,33 @@ simdata_mpjlcmm <- function(K,N,ng,t,age0=NULL,Xbin=NULL,Xcont=NULL,beta_Y1,beta
         beta2 <- matrix(unlist(beta_Y2),ncol=ng,byrow=TRUE)
         rownames(beta2) <- names(beta_Y2)
     }
-    beta <- list(beta1,beta2)
+    beta3 <- NULL
+    if(!is.null(beta_Y3))
+    {
+        beta3 <- matrix(unlist(beta_Y3),ncol=ng,byrow=TRUE)
+        rownames(beta3) <- names(beta_Y3)
+    }
+    beta <- list(beta1,beta2,beta3)
     
-    linear <- rbind(linear1,linear2)
+    linear <- rbind(linear1,linear2,linear3)
 
-    B <- list(B1,B2)
+    if(!is.null(vcovB)) # effets aleatoires correles
+    {
+        B <- as.matrix(vcovB)
+    }
+    else
+    {
+        B <- list(B1,B2,B3) # effets aletoires indep entr les dimensions
+    }
 
     if(!is.null(weib))
     {
         if(length(weib)==2) weib <- rep(weib,ng)
-        if(logscale==FALSE) weib <- weib^2 #logscale=FALSE by defaut
+        if(logscale==FALSE) weib <- weib^2 #logscale=FALSE par defaut
         if(logscale==TRUE) weib <- exp(weib)
     }
     
-    ## simul data for n subjects
+    ## simuler les donnees pour n sujets
     res <- NULL
     i <- 1
     nb <- 0
@@ -63,6 +76,12 @@ simdata_mpjlcmm <- function(K,N,ng,t,age0=NULL,Xbin=NULL,Xcont=NULL,beta_Y1,beta
             if(length(age0)==2) a <- runif(1,age0[1],age0[2])
             if(length(age0)==1) a <- rnorm(1,Xcont[age0,1],Xcont[age0,2])
             if(!(length(age0) %in% 1:2)) stop("mauvais age0")
+        }
+
+        ##simuler les effets aleatoires si vcivB specifie
+        if(!is.null(vcovB))
+        {
+            uitot <- as.numeric(mvtnorm::rmvnorm(1, sigma=vcovB))
         }
         
         ## simuler les temps si ce sont les memes dans chaque composante
@@ -357,17 +376,24 @@ simdata_mpjlcmm <- function(K,N,ng,t,age0=NULL,Xbin=NULL,Xcont=NULL,beta_Y1,beta
             ## simuler les effets aleatoires
             if(!is.null(zik))
             {
-                if(is.vector(B[[k]]))
+                if(!is.null(vcovB))
                 {
-                    BB <- matrix(0,Z[k],Z[k])
-                    BB[upper.tri(BB,diag=TRUE)] <- B[[k]]
-                    BB <- t(BB)
-                    BB[upper.tri(BB,diag=TRUE)] <- B[[k]]
-                    B[[k]] <- BB
+                    ui <- uitot[sum(Z[1:k])-Z[k]+1:Z[k]]
                 }
-                chB <- t(chol(B[[k]]))
-                u01 <- rnorm(Z[k])
-                ui <- chB %*% u01
+                else
+                {
+                    if(is.vector(B[[k]]))
+                    {
+                        BB <- matrix(0,Z[k],Z[k])
+                        BB[upper.tri(BB,diag=TRUE)] <- B[[k]]
+                        BB <- t(BB)
+                        BB[upper.tri(BB,diag=TRUE)] <- B[[k]]
+                        B[[k]] <- BB
+                    }
+                    chB <- t(chol(B[[k]]))
+                    u01 <- rnorm(Z[k])
+                    ui <- chB %*% u01
+                }
             }
             else
             {
@@ -392,14 +418,17 @@ simdata_mpjlcmm <- function(K,N,ng,t,age0=NULL,Xbin=NULL,Xcont=NULL,beta_Y1,beta
             {
                 if(length(t)==4)
                 {
+                    oldnames <- colnames(datai)
                     datai <- data.frame(datai, xbzu, zik%*%ui, epsi, yi)
-                    colnames(datai) <- c("i","classe","t","visite",names(varexpli),"xbzu1","zu1","eps1","Y1","Tsurv","Dsurv","xbzu2",paste(c("zu","eps","Y"),k,sep=""))
+                    colnames(datai) <- c(oldnames, paste(c("xbzu","zu","eps","Y"),k,sep=""))
+                    #colnames(datai) <- c("i","classe","t","visite",names(varexpli),"xbzu1","zu1","eps1","Y1","Tsurv","Dsurv","xbzu2",paste(c("zu","eps","Y"),k,sep=""))
                 }
                 else
                 {
                     datai <- data.frame(K=1,datai)
+                    print(c("K","i","classe","t","visite",names(varexpli),"xbzu","zu","eps","Y","Tsurv","Dsurv"))
                     colnames(datai) <- c("K","i","classe","t","visite",names(varexpli),"xbzu","zu","eps","Y","Tsurv","Dsurv")
-                    dataik <- data.frame(K=k, i=i, t=tik, visite=visite, matrix(varexpli,nrow=length(tik),ncol=length(varexpli),byrow=TRUE), xbzu, zik%*%ui, epsi, yi, Tsurv, Dsurv)
+                    dataik <- data.frame(K=k, i=i, classe=classe, t=tik, visite=visite, matrix(varexpli,nrow=length(tik),ncol=length(varexpli),byrow=TRUE), xbzu, zik%*%ui, epsi, yi, Tsurv, Dsurv)
                     colnames(dataik) <- colnames(datai)
                     
                     datai <- rbind(datai,dataik)
@@ -430,20 +459,20 @@ simdata_mpjlcmm <- function(K,N,ng,t,age0=NULL,Xbin=NULL,Xcont=NULL,beta_Y1,beta
 
 ## en piecewise:
 
-zl <- c(0,0.1533196, 0.3039014, 0.495551, 1.243 ) #hazardnodes
-bl <- c( 0.2416715,0.8212857, 1.5068744,0.6197200) #brisq^2
+## zl <- c(0,0.1533196, 0.3039014, 0.495551, 1.243 ) #hazardnodes
+## bl <- c( 0.2416715,0.8212857, 1.5068744,0.6197200) #brisq^2
  
-surv1 <- function(t,zl,bl,ph=1,p)
-{
-    j <- which.max(zl[which(zl<=t)])
-    if(j==1) som <- 0 
-    else som <- sum(bl[1:(j-1)]*(zl[2:j]-zl[1:(j-1)]))
+## surv1 <- function(t,zl,bl,ph=1,p)
+## {
+##     j <- which.max(zl[which(zl<=t)])
+##     if(j==1) som <- 0 
+##     else som <- sum(bl[1:(j-1)]*(zl[2:j]-zl[1:(j-1)]))
 
-    if(j<length(zl)) surv <- exp(-(som+bl[j]*(t-zl[j]))*exp(ph))
-    else surv <- exp(-som*exp(ph))
+##     if(j<length(zl)) surv <- exp(-(som+bl[j]*(t-zl[j]))*exp(ph))
+##     else surv <- exp(-som*exp(ph))
 
-    return(surv-p)
-}
+##     return(surv-p)
+## }
 
 
-uniroot(surv1,interval=c(0,1.243),zl=zl,bl=bl,p=0.7)
+## uniroot(surv1,interval=c(0,1.243),zl=zl,bl=bl,p=0.7)
